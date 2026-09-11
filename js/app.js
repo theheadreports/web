@@ -43,9 +43,9 @@ el.loginForm.addEventListener('submit', (e) => {
   el.loginSubmitBtn.disabled = true;
   el.loginSubmitBtn.textContent = 'جارٍ تسجيل الدخول...';
 
-  el.loginScreen.classList.add('hidden');
-  el.topbar.classList.remove('hidden');
-  el.mainContent.classList.remove('hidden');
+  el.loginScreen.hidden = true;
+  el.topbar.hidden = false;
+  el.mainContent.hidden = false;
 
   state.results = new Map();
   for (const school of SCHOOLS) state.results.set(school.id, { school, status: 'loading' });
@@ -117,7 +117,7 @@ function addInto(a, b) {
 // المستوى ١: نظرة عامة — بطاقة لكل مدرسة
 // ------------------------------------------------------------------
 function renderOverview() {
-  el.backBtn.classList.add('hidden');
+  el.backBtn.hidden = true;
   el.pageTitle.textContent = 'نظرة عامة — جميع المدارس';
   el.pageSubtitle.textContent = 'إجمالي مجمّع من المدارس الست، مع تفصيل كل مدرسة على حدة';
 
@@ -190,7 +190,7 @@ function renderSchoolView() {
   const r = state.results.get(state.schoolId);
   if (!r || r.status !== 'ok') { state.view = 'overview'; return render(); }
 
-  el.backBtn.classList.remove('hidden');
+  el.backBtn.hidden = false;
   el.pageTitle.textContent = r.school.name;
   el.pageSubtitle.textContent = 'اختر المرحلة للاطلاع على صفوفها';
 
@@ -231,7 +231,7 @@ function renderStageView() {
   const stage = STAGES.find((s) => s.id === state.stageId);
   if (!stage) { state.view = 'school'; return render(); }
 
-  el.backBtn.classList.remove('hidden');
+  el.backBtn.hidden = false;
   el.pageTitle.textContent = `${stage.name} — ${r.school.name}`;
   el.pageSubtitle.textContent = 'اختر الصف للمتابعة';
 

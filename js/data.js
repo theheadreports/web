@@ -121,7 +121,10 @@ async function loadOneSchool(school, username, password) {
     return { school, status: 'error', message: 'تعذّر تهيئة الاتصال بمشروع Firebase الخاص بهذه المدرسة.' };
   }
 
-  const db = getFirestore(app);
+  // بعض مشاريع Firebase (مثل eduplus-abha) أُنشئت فيها قاعدة بيانات Firestore باسم مخصّص
+  // (مثل "default" بدون قوسين) بدل قاعدة البيانات الافتراضية المحجوزة الحقيقية "(default)" —
+  // لهذا نسمح بتحديد databaseId صريح لكل مدرسة عبر schools-config.js عند الحاجة.
+  const db = school.databaseId ? getFirestore(app, school.databaseId) : getFirestore(app);
   const uname = String(username || '').trim().toLowerCase();
   let email;
   try {

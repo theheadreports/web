@@ -42,6 +42,9 @@ export const SCHOOLS = [
     id: 'eduplus-abha',
     name: 'إيديوبلس - أبها',
     color: '#f59e0b',
+    // قاعدة بيانات Firestore في هذا المشروع تحديدًا أُنشئت باسم مخصّص "default" (بدون قوسين)
+    // بدل الاسم الافتراضي المحجوز "(default)" — لذلك يجب تحديد databaseId صراحة هنا.
+    databaseId: 'default',
     firebaseConfig: {
       apiKey: 'AIzaSyD1l1f_28mVk9L1xVWUyMGP3a0HRk6xGGw',
       authDomain: 'eduplus-abha.firebaseapp.com',
