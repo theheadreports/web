@@ -1,12 +1,20 @@
 // ------------------------------------------------------------------
 // طبقة البيانات: تسجيل الدخول إلى كل مشروع Firebase على حدة، وجلب بيانات
 // الطلاب والسندات، ثم حساب نفس المؤشرات (KPIs) التي يحسبها كل موقع مدرسة
-// بمفرده — لكن هنا تُجمَّع عبر المدارس الست معًا.
+// بمفرده — لكن هنا تُجمَّع عبر المدارس الست معًا. كما توفر دوال الكتابة
+// (إضافة دفعة، أرشفة/نقل/حذف طالب، إدارة المستخدمين، تغيير كلمة المرور)
+// بنفس منطق وحقول كل موقع مدرسة على حدة (store.js) تمامًا.
 // ------------------------------------------------------------------
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import {
   getAuth,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updatePassword,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
+  signOut,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import {
   getFirestore,
@@ -14,6 +22,10 @@ import {
   getDocs,
   doc,
   getDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  runTransaction,
 } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 import { SCHOOLS, gradeById, STAGES } from './schools-config.js';
 
@@ -43,20 +55,26 @@ function addAgg(a, b) {
 }
 
 // يحسب كل المؤشرات لمدرسة واحدة، بالإضافة إلى تجميعها حسب الصف والمرحلة
+// ملاحظة: الطلاب المؤرشفون (archived === true) لا يُحسبون ضمن أي مؤشر — تمامًا مثل أنهم غير موجودين —
+// حتى تعكس كل الأرقام حالة "الطلاب النشطين" فقط، ويظهر المؤرشفون فقط في شاشة الأرشيف المخصّصة.
 function computeSchoolAggregates(students, vouchers) {
   const paidByStudent = new Map();
   let totalRevenue = 0;
   let totalExpense = 0;
+  const expenseByAccount = new Map();
+  const revenueByAccount = new Map();
 
   for (const v of vouchers) {
     const amount = Number(v.amount) || 0;
     if (v.type === 'receipt') {
       totalRevenue += amount;
+      revenueByAccount.set(v.account_id || 'rev_other', (revenueByAccount.get(v.account_id || 'rev_other') || 0) + amount);
       if (v.student_id) {
         paidByStudent.set(v.student_id, (paidByStudent.get(v.student_id) || 0) + amount);
       }
     } else if (v.type === 'payment') {
       totalExpense += amount;
+      expenseByAccount.set(v.account_id || 'exp_other', (expenseByAccount.get(v.account_id || 'exp_other') || 0) + amount);
     }
   }
 
@@ -65,7 +83,9 @@ function computeSchoolAggregates(students, vouchers) {
   overall.totalRevenue = round2(totalRevenue);
   overall.totalExpense = round2(totalExpense);
 
-  for (const s of students) {
+  const activeStudents = students.filter((s) => s.archived !== true);
+
+  for (const s of activeStudents) {
     const netFee = round2((Number(s.tuition_fee) || 0) * (1 - (Number(s.discount_percent) || 0) / 100));
     const paid = round2(paidByStudent.get(s.id) || 0);
     const remaining = Math.max(0, round2(netFee - paid));
@@ -102,7 +122,21 @@ function computeSchoolAggregates(students, vouchers) {
     if (stageId && byStage.has(stageId)) addAgg(byStage.get(stageId), g);
   }
 
-  return { overall, byGrade, byStage };
+  return {
+    overall, byGrade, byStage,
+    paidByStudent, // Map<studentId, paidAmount> — تُستخدم في شاشة تفاصيل الطالب
+    expenseByAccount, revenueByAccount, // Map<accountId, amount> — تُستخدم في شاشة المنصرفات
+  };
+}
+
+// سجل الجلسات الحيّة (بعد تسجيل دخول ناجح) — يبقى محفوظًا في الذاكرة طوال الجلسة حتى تستخدمه
+// دوال الكتابة (إضافة دفعة، حذف، أرشفة...) دون الحاجة لإعادة تسجيل الدخول في كل مرة.
+const sessions = new Map(); // schoolId -> { school, app, db, auth, email, password }
+
+function getSession(schoolId) {
+  const s = sessions.get(schoolId);
+  if (!s) throw new Error('لا توجد جلسة دخول فعّالة لهذه المدرسة — أعيدوا تسجيل الدخول.');
+  return s;
 }
 
 // تسجيل الدخول إلى مدرسة واحدة (مشروع Firebase منفصل) ثم جلب بياناتها وحساب مؤشراتها
@@ -155,15 +189,19 @@ async function loadOneSchool(school, username, password) {
     return { school, status: 'auth_error', message };
   }
 
+  sessions.set(school.id, { school, app, db, auth, email, password });
+
   try {
-    const [studentsSnap, vouchersSnap] = await Promise.all([
+    const [studentsSnap, vouchersSnap, usersSnap] = await Promise.all([
       getDocs(collection(db, 'students')),
       getDocs(collection(db, 'vouchers')),
+      getDocs(collection(db, 'users')).catch(() => null), // قد لا تُقرأ users إن كان الحساب غير مسؤول — لا نفشل الشاشة كلها بسببها
     ]);
     const students = studentsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
     const vouchers = vouchersSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const users = usersSnap ? usersSnap.docs.map((d) => ({ id: d.id, ...d.data() })) : null;
     const agg = computeSchoolAggregates(students, vouchers);
-    return { school, status: 'ok', ...agg };
+    return { school, status: 'ok', students, vouchers, users, ...agg };
   } catch (e) {
     // نطبع الخطأ الحقيقي في console ونعرض جزءًا منه في الرسالة نفسها — بدل رسالة عامة موحّدة —
     // لتشخيص أي مشكلة فعلية (فهرس مفقود، قاعدة أمان، مشكلة شبكة...) بسرعة دون تخمين.
@@ -177,6 +215,7 @@ async function loadOneSchool(school, username, password) {
 // يسجّل الدخول ويجلب بيانات كل المدارس الست بالتوازي، ويستدعي onSchoolResult
 // فور جهوزية كل مدرسة على حدة (بدل الانتظار حتى تجهز جميعها معًا)
 export function loadAllSchools(username, password, onSchoolResult) {
+  sessions.clear();
   return Promise.all(
     SCHOOLS.map((school) =>
       loadOneSchool(school, username, password).then((result) => {
@@ -185,4 +224,165 @@ export function loadAllSchools(username, password, onSchoolResult) {
       })
     )
   );
+}
+
+// يعيد تحميل بيانات مدرسة واحدة فقط (بعد أي عملية كتابة) باستخدام نفس بيانات الدخول المحفوظة في الجلسة
+export async function refreshSchool(schoolId) {
+  const s = getSession(schoolId);
+  const [studentsSnap, vouchersSnap, usersSnap] = await Promise.all([
+    getDocs(collection(s.db, 'students')),
+    getDocs(collection(s.db, 'vouchers')),
+    getDocs(collection(s.db, 'users')).catch(() => null),
+  ]);
+  const students = studentsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const vouchers = vouchersSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const users = usersSnap ? usersSnap.docs.map((d) => ({ id: d.id, ...d.data() })) : null;
+  const agg = computeSchoolAggregates(students, vouchers);
+  return { school: s.school, status: 'ok', students, vouchers, users, ...agg };
+}
+
+// ------------------------------------------------------------------
+// دوال الكتابة — تُطابق تمامًا نفس الحقول والمنطق المستخدم في js/store.js
+// الخاص بكل موقع مدرسة على حدة (createReceipt / deleteStudent / updateStudent ...)
+// حتى تبقى البيانات متوافقة ١٠٠٪ مع تطبيق المدرسة نفسه.
+// ------------------------------------------------------------------
+
+// إضافة دفعة (سند قبض) لطالب — يحجز رقمًا تسلسليًا فريدًا عبر معاملة Firestore
+export async function addPayment(schoolId, student, { amount, date, method, accountId, note }) {
+  const s = getSession(schoolId);
+  const cashSide = method === 'bank' ? 'bank' : 'cash';
+  const resolvedAccountId = accountId || 'rev_tuition';
+  const ref = doc(collection(s.db, 'vouchers'));
+  const record = {
+    id: ref.id, type: 'receipt', serial: '', date, amount: round2(Number(amount)),
+    party_name: student.name || '', student_id: student.id, method: cashSide,
+    account_id: resolvedAccountId, fee_type_id: null,
+    debit_account_id: cashSide, credit_account_id: resolvedAccountId,
+    description: note || '', created_at: new Date().toISOString(),
+  };
+  await runTransaction(s.db, async (tx) => {
+    const countersRef = doc(s.db, 'meta', 'counters');
+    const countersSnap = await tx.get(countersRef);
+    const counters = countersSnap.exists() ? countersSnap.data() : { receipt: 0, payment: 0 };
+    const next = (counters.receipt || 0) + 1;
+    record.serial = `REC-${String(next).padStart(4, '0')}`;
+    tx.set(countersRef, { ...counters, receipt: next }, { merge: true });
+    tx.set(ref, record);
+  });
+  return record;
+}
+
+// أرشفة/إلغاء أرشفة طالب — حقل "archived" غير موجود أصلًا في تطبيق المدرسة الخاص بها (store.js)،
+// لذلك هذه الأرشفة تخصّ لوحة التحكم الموحّدة فقط حاليًا: الطالب سيختفي من كل الإحصائيات هنا،
+// لكنه سيبقى ظاهرًا بشكل طبيعي في موقع المدرسة نفسه ما لم يُطلب لاحقًا تعديل ذلك الموقع أيضًا.
+export async function setStudentArchived(schoolId, studentId, archived) {
+  const s = getSession(schoolId);
+  await updateDoc(doc(s.db, 'students', studentId), { archived: !!archived });
+}
+
+// نقل طالب إلى صف آخر — نفس منطق updateStudent في store.js (يحافظ على رقم القيد كما هو)
+export async function transferStudent(schoolId, studentId, newClassId) {
+  const s = getSession(schoolId);
+  await updateDoc(doc(s.db, 'students', studentId), { class_id: newClassId, updated_at: new Date().toISOString() });
+}
+
+// حذف طالب واحد — يتطلب صلاحية "مسؤول" فعليًا عبر Security Rules في كل مشروع
+export async function deleteStudent(schoolId, studentId) {
+  const s = getSession(schoolId);
+  await deleteDoc(doc(s.db, 'students', studentId));
+}
+
+// حذف كل طلاب صف واحد دفعة واحدة
+export async function deleteAllStudentsInClass(schoolId, studentIds) {
+  const s = getSession(schoolId);
+  for (const id of studentIds) {
+    // تتابعي عمدًا (لا Promise.all) لتفادي إغراق القراءة/الكتابة بطلبات متزامنة كثيرة جدًا دفعة واحدة
+    await deleteDoc(doc(s.db, 'students', id));
+  }
+}
+
+// ---------- إدارة المستخدمين (المديرين) — نفس منطق createUser/updateUser/deleteUser في store.js ----------
+
+export async function createManager(schoolId, { username, password, name, role, email }) {
+  const s = getSession(schoolId);
+  const uname = String(username || '').trim().toLowerCase();
+  if (!/^[a-z0-9_.\-]{3,30}$/.test(uname)) throw new Error('اسم المستخدم يجب أن يكون 3-30 حرفًا (إنجليزي/أرقام/._- فقط)');
+  const mail = String(email || '').trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) throw new Error('يرجى إدخال بريد إلكتروني صحيح');
+  if (!password || password.length < 8) throw new Error('كلمة المرور يجب ألا تقل عن 8 أحرف');
+  const existingMap = await getDoc(doc(s.db, 'usernames', uname));
+  if (existingMap.exists()) throw new Error('اسم المستخدم موجود مسبقًا في هذه المدرسة');
+  const roleVal = role === 'admin' ? 'admin' : 'staff';
+
+  // تطبيق Firebase ثانوي مؤقت حتى لا يُفقَد تسجيل دخول الحساب الحالي أثناء إنشاء الحساب الجديد
+  const secondaryApp = initializeApp(s.school.firebaseConfig, `SecondaryUserCreation-${schoolId}-${Date.now()}`);
+  const secondaryAuth = getAuth(secondaryApp);
+  try {
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, mail, password);
+    const newUid = cred.user.uid;
+    await signOut(secondaryAuth);
+    const createdAt = Date.now();
+    await setDoc(doc(s.db, 'users', newUid), {
+      uid: newUid, username: uname, email: mail, name: (name || '').trim() || uname, role: roleVal, active: true, createdAt,
+    });
+    await setDoc(doc(s.db, 'usernames', uname), { email: mail });
+    return { id: newUid, uid: newUid, username: uname, email: mail, name: (name || '').trim() || uname, role: roleVal, active: true, createdAt };
+  } catch (e) {
+    const code = e && e.code ? e.code : '';
+    if (code === 'auth/email-already-in-use') throw new Error('هذا البريد الإلكتروني مستخدَم مسبقًا لحساب آخر');
+    throw new Error('تعذّر إنشاء الحساب: ' + ((e && e.message) || code || e));
+  } finally {
+    try { await deleteApp(secondaryApp); } catch (e) { /* تجاهل */ }
+  }
+}
+
+export async function updateManager(schoolId, uid, { name, role, active }) {
+  const s = getSession(schoolId);
+  const roleVal = role === 'admin' ? 'admin' : 'staff';
+  await updateDoc(doc(s.db, 'users', uid), {
+    ...(typeof name === 'string' && name.trim() ? { name: name.trim() } : {}),
+    role: roleVal,
+    active: active !== false,
+  });
+}
+
+export async function sendManagerPasswordReset(schoolId, email) {
+  const s = getSession(schoolId);
+  await sendPasswordResetEmail(s.auth, email);
+}
+
+export async function deleteManager(schoolId, uid) {
+  const s = getSession(schoolId);
+  await deleteDoc(doc(s.db, 'users', uid));
+}
+
+// تغيير كلمة المرور المشتركة عبر كل المدارس التي تم تسجيل الدخول إليها بنجاح في هذه الجلسة —
+// يتطلب "reauthenticate" أولًا (كلمة المرور الحالية) لأسباب أمنية يفرضها Firebase نفسه.
+export async function changeSharedPassword(currentPassword, newPassword) {
+  const results = [];
+  for (const s of sessions.values()) {
+    const user = s.auth.currentUser;
+    if (!user) { results.push({ schoolId: s.school.id, ok: false, error: 'لا توجد جلسة دخول فعّالة.' }); continue; }
+    try {
+      const cred = EmailAuthProvider.credential(user.email, currentPassword);
+      await reauthenticateWithCredential(user, cred);
+      await updatePassword(user, newPassword);
+      results.push({ schoolId: s.school.id, ok: true });
+    } catch (e) {
+      const code = e && e.code;
+      let message = (e && e.message) || String(e);
+      if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') message = 'كلمة المرور الحالية غير صحيحة.';
+      results.push({ schoolId: s.school.id, ok: false, error: message });
+    }
+  }
+  return results;
+}
+
+export function getSessionSchoolIds() {
+  return Array.from(sessions.keys());
+}
+
+export function getSessionInfo(schoolId) {
+  const s = sessions.get(schoolId);
+  return s ? { email: s.email } : null;
 }

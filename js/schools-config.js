@@ -129,3 +129,25 @@ export function gradeById(id) {
 export function stageById(id) {
   return STAGES.find((s) => s.id === id) || null;
 }
+
+// دليل الحسابات — نفس القائمة الثابتة المستخدمة في كود كل موقع مدرسة على حدة (store.js)،
+// لذلك يمكن الاعتماد عليها هنا لعرض المصروفات والرسوم حسب الحساب دون قراءة إضافية من Firestore.
+export const ACCOUNTS = [
+  { id: 'cash', code: '1001', name: 'الصندوق (النقدية)', type: 'asset' },
+  { id: 'bank', code: '1002', name: 'البنك', type: 'asset' },
+  { id: 'rev_tuition', code: '4001', name: 'إيرادات الرسوم الدراسية', type: 'revenue' },
+  { id: 'rev_activities', code: '4002', name: 'إيرادات الأنشطة والباصات', type: 'revenue' },
+  { id: 'rev_other', code: '4003', name: 'إيرادات أخرى', type: 'revenue' },
+  { id: 'exp_salaries', code: '5001', name: 'رواتب الموظفين', type: 'expense' },
+  { id: 'exp_supplies', code: '5003', name: 'مستلزمات وقرطاسية', type: 'expense' },
+  { id: 'exp_maintenance', code: '5004', name: 'صيانة وتشغيل', type: 'expense' },
+  { id: 'exp_other', code: '5005', name: 'مصروفات أخرى', type: 'expense' },
+];
+
+export function accountById(id) {
+  return ACCOUNTS.find((a) => a.id === id) || null;
+}
+
+export function accountLabel(id) {
+  return accountById(id) || { id, code: '—', name: id || 'حساب غير معروف', type: '' };
+}
