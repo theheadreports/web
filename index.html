@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>نظرة عامة | جميع المدارس</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ============ شاشة تسجيل الدخول ============ -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <h1>نظرة عامة — جميع المدارس</h1>
+    <p>سجّلوا الدخول بحساب العرض (المشترك بين المدارس الست) لعرض مؤشرات كل مدرسة مجمّعة في مكان واحد.</p>
+    <form id="loginForm">
+      <label for="loginUsername">اسم المستخدم</label>
+      <input type="text" id="loginUsername" required autocomplete="username" />
+      <label for="loginPassword">كلمة المرور</label>
+      <input type="password" id="loginPassword" required autocomplete="current-password" />
+      <button type="submit" class="login-submit" id="loginSubmitBtn">تسجيل الدخول</button>
+      <div class="login-error" id="loginError"></div>
+    </form>
+    <div class="login-hint">
+      يجب إنشاء نفس اسم المستخدم وكلمة المرور كحساب في كل مدرسة من المدارس الست (من داخل شاشة "المستخدمين" في كل موقع) —
+      لا حاجة لنفس البريد الإلكتروني في كل مدرسة. راجعوا التعليمات المرفقة مع هذا الموقع.
+    </div>
+  </div>
+</div>
+
+<!-- ============ الشريط العلوي ============ -->
+<header class="topbar hidden" id="topbar">
+  <div class="topbar-left">
+    <button class="back-btn hidden" id="backBtn">→ رجوع</button>
+    <div>
+      <h1 id="pageTitle">نظرة عامة — جميع المدارس</h1>
+      <p id="pageSubtitle">مؤشرات مجمّعة من المدارس الست</p>
+    </div>
+  </div>
+  <button class="logout-btn" id="logoutBtn">تسجيل الخروج</button>
+</header>
+
+<!-- ============ المحتوى الرئيسي ============ -->
+<main class="container hidden" id="mainContent"></main>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
