@@ -134,7 +134,8 @@ async function loadOneSchool(school, username, password) {
     }
     email = mapDoc.data().email;
   } catch (e) {
-    return { school, status: 'auth_error', message: 'تعذّر التحقق من اسم المستخدم لهذه المدرسة.' };
+    console.error('[schools-overview] usernames lookup failed for', school.id, e);
+    return { school, status: 'auth_error', message: `تعذّر التحقق من اسم المستخدم لهذه المدرسة. (${(e && e.code) || (e && e.message) || e})` };
   }
 
   const auth = getAuth(app);
@@ -147,6 +148,9 @@ async function loadOneSchool(school, username, password) {
       message = 'كلمة المرور غير صحيحة لهذه المدرسة — راجعوا خطوات الإعداد.';
     } else if (code === 'auth/too-many-requests') {
       message = 'محاولات كثيرة جدًا — الرجاء الانتظار قليلاً ثم إعادة المحاولة.';
+    } else {
+      console.error('[schools-overview] sign-in failed for', school.id, e);
+      message = `تعذّر تسجيل الدخول لهذه المدرسة. [التفاصيل: ${code || (e && e.message) || e}]`;
     }
     return { school, status: 'auth_error', message };
   }
@@ -161,7 +165,11 @@ async function loadOneSchool(school, username, password) {
     const agg = computeSchoolAggregates(students, vouchers);
     return { school, status: 'ok', ...agg };
   } catch (e) {
-    let message = 'تعذّر قراءة بيانات هذه المدرسة — تحقّقوا من صلاحيات الحساب (users/{uid}.active يجب أن تساوي true).';
+    // نطبع الخطأ الحقيقي في console ونعرض جزءًا منه في الرسالة نفسها — بدل رسالة عامة موحّدة —
+    // لتشخيص أي مشكلة فعلية (فهرس مفقود، قاعدة أمان، مشكلة شبكة...) بسرعة دون تخمين.
+    console.error('[schools-overview] reading students/vouchers failed for', school.id, e);
+    const detail = (e && e.code) || (e && e.message) || String(e);
+    const message = `تعذّر قراءة بيانات هذه المدرسة — تحقّقوا من صلاحيات الحساب (users/{uid}.active يجب أن تساوي true). [التفاصيل: ${detail}]`;
     return { school, status: 'read_error', message };
   }
 }
